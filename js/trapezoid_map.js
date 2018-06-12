@@ -13,10 +13,10 @@ function relative_pos(node, p) {
       let delta_y =  sg_b.y - sg_a.y
 
       if (p.y > sg_a.y && p.y > sg_b.y) {
-        return 'UP'
+        return 'DOWN'
       }
       else if (p.y < sg_a.y && p.y < sg_b.y) {
-        return 'DOWN'
+        return 'UP'
       }
       else if ((p.x == sg_a.x && p.y == sg_a.y) || (p.x == sg_b.x && p.y == sg_b.y)) {
         return 'OVERLAP'
@@ -24,11 +24,23 @@ function relative_pos(node, p) {
       else {
         let f_Px = (p.x - sg_b.x) * (delta_y / delta_x) + sg_b.y
         if (f_Px == p.y) return 'OVERLAP'
-        return f_Px > p.y ? 'DOWN' : 'UP'
+        return f_Px > p.y ? 'UP' : 'DOWN'
       }
   }
 }
 
+function bet_points(pa, pb, x, get_x=false) {
+  assert(pb.x - pa.x !== 0, 'Div by zero!')
+
+  if(!get_x) {
+    let grad = (pb.y - pa.y) / (pb.x - pa.x)
+    return (x - pa.x) * grad + pa.y
+  }
+  else {
+    let grad = (pa.x - pb.x) / (pa.y - pb.y)
+    return (x - pb.y) * grad + pb.x
+  }
+}
 
 function swap_leaf(leaf, new_node) {
   let parent = leaf.parent
@@ -64,22 +76,33 @@ function TrapezoidMap(canvas, d3_update) {
   this._canvas = canvas
   this._fabric_canvas = null
   this._fabric_objs = []
+  this._fabric_debug_objs = []
   this._fabric_points_link = []
+  this._fabric_state_text = null
+  this._fabric_query_point = null
+  this._fabric_trapezoid = {}
 
   this._d3_update = d3_update
 
   this._op_mode = 'MOVE'
-  this.DEBUG = true
+  this.DEBUG = false
 
   this.search_graph = {
     name: 'T1', type: 'trapezoid',
     parent: null, left: null, right: null,
-    meta: null
+    meta: {
+      p1: { x: 0, y: 0},
+      p2: { x: Number.parseInt($(canvas).width()), y: 0 },
+      p3: { x: 0, y: Number.parseInt($(canvas).height()) },
+      p4: { x: Number.parseInt($(canvas).width()), y: Number.parseInt($(canvas).height()) },
+    }
   }
 
   this._graph_dict = {}
   this._segment_dict = {}
   this._point_list = []
+
+  if (this.DEBUG) console.log('init search_graph: ', this.search_graph)
 }
 
 
@@ -89,10 +112,51 @@ TrapezoidMap.prototype.debug = function(mes) {
 }
 
 
+TrapezoidMap.prototype.debug_draw = function(point) {
+  if(this.DEBUG) {
+    // for (let obj of this._fabric_debug_objs) {
+    //   this._fabric_canvas.remove(obj)
+    // }
+    // this._fabric_debug_objs = []
+
+    let c = new fabric.Circle({
+      left: point.x,
+      top: point.y,
+      strokeWidth: 2,
+      radius: 6,
+      fill: '#3dff62',
+      stroke: '#fff',
+      lockScalingX: true,
+      lockScalingY: true,
+      selectable: false,
+    })
+
+    this._fabric_canvas.add(c)
+    c.setCoords()
+    this._fabric_debug_objs.push(c)
+    this._fabric_canvas.renderAll()
+  }
+}
+
+
+TrapezoidMap.prototype.debug_clear_draw = function(point) {
+  for (let obj of this._fabric_debug_objs) {
+    this._fabric_canvas.remove(obj)
+  }
+  this._fabric_debug_objs = []
+}
+
 TrapezoidMap.prototype.initCanvas = function() {
   this._canvas.height = document.querySelector('#canvas-wrapper').offsetHeight
   this._canvas.width = document.querySelector('#canvas-wrapper').offsetWidth
   this._fabric_canvas = new fabric.Canvas(this._canvas)
+  this._fabric_state_text = new fabric.Text("HI", {
+    top: 0, left: 0,
+    fontSize: 15,
+    fill: 'rgb(177,238,46)',
+    fontFamily: 'Delicious',
+  })
+  this._fabric_canvas.add(this._fabric_state_text)
 
   this._fabric_canvas.on('mouse:down', (o) => {
 
@@ -102,14 +166,37 @@ TrapezoidMap.prototype.initCanvas = function() {
     let origY = pointer.y
 
     switch(this._op_mode) {
-      case 'MOVE':
+      case 'QUERY':
+        if (this._fabric_query_point !== null) this._fabric_canvas.remove(this._fabric_query_point)
+
+        let q = new fabric.Circle({
+          left: origX,
+          top: origY,
+          strokeWidth: 2,
+          radius: 6,
+          fill: '#24fed6',
+          stroke: '#666',
+          lockScalingX: true,
+          lockScalingY: true,
+        })
+
+        this._fabric_canvas.add(q)
+        q.setCoords()
+        this._fabric_query_point = q
+
+        let trapezoid = this.query({ x: origX, y: origY })
+        this._fabric_state_text.setText(`Point inside ${trapezoid.name}`)
+
+        this._fabric_canvas.renderAll()
         break
 
       case 'LINK':
-        if(o.target) {
-          console.log(o.target, this._fabric_points_link)
+        if(o.target && o.target.x1 === undefined && o.target != this._fabric_points_link[0] && o.target.selectable) { // if anything got selected. and make sure target is Circle object.
+          console.log(typeof o.target, o.target, this._fabric_points_link)
+
           this._fabric_points_link.push(o.target)
           o.target.set({ stoke: 'rgb(3, 192, 220)' })
+          this._fabric_state_text.setText(`Point selected: ${this._fabric_points_link.length}`)
           this._fabric_canvas.renderAll()
 
           if(this._fabric_points_link.length >= 2) {
@@ -140,11 +227,11 @@ TrapezoidMap.prototype.initCanvas = function() {
               }
             )
 
+            console.log('Add LInk', this._fabric_points_link)
             this._fabric_objs.push(line)
             this._fabric_points_link = []
             this._fabric_canvas.add(line)
             this._fabric_canvas.renderAll()
-            console.log('Add LInk')
           }
         }
         break
@@ -202,8 +289,46 @@ TrapezoidMap.prototype.initD3Tree = function() {
 }
 
 
+TrapezoidMap.prototype.draw_trapezoid = function(points, name) {
+  if (this.DEBUG) {
+    console.log(`${name}:`, points)
+  }
+
+  let top = points.p1.y > points.p2.y ? points.p1.y : points.p1.y + (points.p2.y - points.p1.y)
+
+  let polygon = new fabric.Polygon([
+      points.p1,
+      points.p2,
+      points.p4,
+      points.p3
+    ],{
+    left: points.p1.x,
+    top: points.p1.y < points.p2.y ? points.p1.y : points.p1.y + (points.p2.y - points.p1.y),
+    fill: 'purple',
+    stroke: 'white',
+    opacity: 0.5,
+    selectable: false,
+    objectCaching: false,
+  })
+
+  this._fabric_trapezoid[name] = polygon
+  this._fabric_canvas.add(polygon)
+  this._fabric_canvas.sendToBack(polygon)
+  // this._fabric_canvas.renderAll()
+}
+
+
+TrapezoidMap.prototype.remove_trapezoid = function(name) {
+  if (this._fabric_trapezoid[name] !== undefined) {
+    console.log('Remove: ', name)
+    this._fabric_canvas.remove(this._fabric_trapezoid[name])
+    delete this._fabric_trapezoid[name]
+  }
+  // this._fabric_canvas.renderAll()
+}
+
 /**
-* Add segemnt into ploygon & search graph by given two end point of the segment.
+* Add segemnt into ploygon & search graph given two end point of the segment.
 * @param p_a point_A of segment {x: int, y: int, name: str}
 * @param p_b point_B of segment {x: int, y: int, name: str}
 * Assert point_A.x < point_B.x
@@ -211,28 +336,60 @@ TrapezoidMap.prototype.initD3Tree = function() {
 TrapezoidMap.prototype.add_segment = function(p_a, p_b) {
   let leaf_a = this.query(p_a)
   let leaf_b = this.query(p_b)
+
+  let trapezoids = this.cross_trapezoid(p_a, p_b)
+  let left_most = trapezoids[0]
+  let right_most = trapezoids.end()
+  // if (leaf_a == null &&leaf_b == null) {
+  //   leaf_a = this.query({ x: p_a.x + 1, y: p_a.y })
+  //   leaf_b = this.query({ x: p_b.x - 1, y: p_b.y })
+  // }
   const ID = Object.keys(this._segment_dict).length
 
-  if(leaf_a == leaf_b) { // segement be contained in single trapezoid
+  if(leaf_a == leaf_b && leaf_a != null && leaf_b != null) { // segement be contained in single trapezoid
     let parent = leaf_a.parent
     let T_A = {
       name: `T${ID}A`, type: 'trapezoid',
-      parent: null, left: null, right: null, meta: null
+      parent: null, left: null, right: null,
+      meta: {
+        p1: { ...leaf_a.meta.p1 },
+        p2: { x: p_a.x, y: bet_points(leaf_a.meta.p1, leaf_a.meta.p2, p_a.x) },
+        p3: { ...leaf_a.meta.p3 },
+        p4: { x: p_a.x, y: bet_points(leaf_a.meta.p3, leaf_a.meta.p4, p_a.x) },
+      }
     }
 
     let T_B = {
       name: `T${ID}B`, type: 'trapezoid',
-      parent: null, left: null, right: null, meta: null
+      parent: null, left: null, right: null,
+      meta: {
+        p1: { x: p_a.x, y: bet_points(leaf_a.meta.p1, leaf_a.meta.p2, p_a.x) },
+        p2: { x: p_b.x, y: bet_points(leaf_a.meta.p1, leaf_a.meta.p2, p_b.x) },
+        p3: { ...p_a },
+        p4: { ...p_b },
+      }
     }
 
     let T_C = {
       name: `T${ID}C`, type: 'trapezoid',
-      parent: null, left: null, right: null, meta: null
+      parent: null, left: null, right: null,
+      meta: {
+        p1: { ...p_a },
+        p2: { ...p_b },
+        p3: { x: p_a.x, y: bet_points(leaf_a.meta.p3, leaf_a.meta.p4, p_a.x) },
+        p4: { x: p_b.x, y: bet_points(leaf_a.meta.p3, leaf_a.meta.p4, p_b.x) },
+      }
     }
 
     let T_D = {
       name: `T${ID}D`, type: 'trapezoid',
-      parent: null, left: null, right: null, meta: null
+      parent: null, left: null, right: null,
+      meta: {
+        p1: { x: p_b.x, y: bet_points(leaf_a.meta.p1, leaf_a.meta.p2, p_b.x) },
+        p2: { ...leaf_a.meta.p2 },
+        p3: { x: p_b.x, y: bet_points(leaf_a.meta.p3, leaf_a.meta.p4, p_b.x) },
+        p4: { ...leaf_a.meta.p4 },
+      }
     }
 
     let S = {
@@ -291,19 +448,22 @@ TrapezoidMap.prototype.add_segment = function(p_a, p_b) {
       this.d3_root.y0 = 0
       this._d3_update(this.d3_root, this.d3_treemap, this.d3_svg)
     }
+
+    if (parent !== null) this.remove_trapezoid(leaf_a.name)
+    this.draw_trapezoid(T_A.meta, T_A.name)
+    this.draw_trapezoid(T_B.meta, T_B.name)
+    this.draw_trapezoid(T_C.meta, T_C.name)
+    this.draw_trapezoid(T_D.meta, T_D.name)
   }
   else {
-    let trapezoids = this.cross_trapezoid(p_a, p_b)
-    let left_most = trapezoids[0]
-    let right_most = trapezoids.end()
 
     this.debug('----[Left Right]----')
     this.debug(trapezoids)
     this.debug(leaf_a)
     this.debug(leaf_b)
 
-    if(leaf_a) assert(left_most == leaf_a)
-    if(leaf_b) assert(right_most == leaf_b)
+    if(leaf_a) assert(left_most == leaf_a, `left most tapezoid${left_most.name} != tapezoid point_a locate ${leaf_a.name}`)
+    if(leaf_b) assert(right_most == leaf_b, `right most tapezoid${right_most.name} != tapezoid point_b locate ${leaf_b.name}`)
 
     const get_S = () => (
       {
@@ -323,29 +483,82 @@ TrapezoidMap.prototype.add_segment = function(p_a, p_b) {
 
     for (let i = 0; i < trapezoids.length; i++) {
       let S_i = get_S()
+      let T_i = trapezoids[i]
+      let isLR = (i == 0 && leaf_a != null) || (i == trapezoids.length - 1 && leaf_b != null)
       S_list.push(S_i)
 
       let T_up = {
         name: `T${ID}_${i}U`, type: 'trapezoid',
-        parent: S_i, left: null, right: null, meta: null
+        parent: S_i, left: null, right: null,
+        meta: null
       }
       let T_dw = {
         name: `T${ID}_${i}D`, type: 'trapezoid',
-        parent: S_i, left: null, right: null, meta: null
+        parent: S_i, left: null, right: null,
+        meta: null
       }
+
       S_i.left = T_up
       S_i.right = T_dw
 
+
       // if p_a or p_b overlap with other point leaf_A/B will be null.
-      if((i == 0 && leaf_a != null) || (i == trapezoids.length - 1 && leaf_b != null)) {
+      if(isLR) {
         let isLeft = (
-          (i == 0 && trapezoids.length > 1)
-          || (i == 0 && leaf_a != null && trapezoids.length == 1)
+          (i == 0 && trapezoids.length > 1) ||
+          (i == 0 && leaf_a != null && trapezoids.length == 1)
         )
+
+        if (isLeft) {
+          T_up.meta = {
+            p1: { x: p_a.x, y: bet_points(T_i.meta.p1, T_i.meta.p2, p_a.x) },
+            p2: { ...T_i.meta.p2 },
+            p3: { ...p_a },
+            p4: { x: T_i.meta.p4.x, y: bet_points(p_a, p_b, T_i.meta.p4.x) },
+          }
+          T_dw.meta = {
+            p1: { ...p_a },
+            p2: { x: T_i.meta.p2.x, y: bet_points(p_a, p_b, T_i.meta.p2.x) },
+            p3: { x: p_a.x, y: bet_points(T_i.meta.p3, T_i.meta.p4, p_a.x) },
+            p4: { ...T_i.meta.p4 },
+          }
+        }
+        else {
+          T_up.meta = {
+            p1: { ...T_i.meta.p1 },
+            p2: { x: p_b.x, y: bet_points(T_i.meta.p1, T_i.meta.p2, p_b.x) },
+            p3: { x: T_i.meta.p3.x, y: bet_points(p_a, p_b, T_i.meta.p3.x) },
+            p4: { ...p_b },
+          }
+          T_dw.meta = {
+            p1: { x: T_i.meta.p1.x, y: bet_points(p_a, p_b, T_i.meta.p1.x) },
+            p2: { ...p_b },
+            p3: { ...T_i.meta.p3 },
+            p4: { x: p_b.x, y: bet_points(T_i.meta.p3, T_i.meta.p4, p_b.x) },
+          }
+        }
 
         let T_A = {
           name: `T${ID}_${i}A`, type: 'trapezoid',
-          parent: null, left: null, right: null, meta: null
+          parent: null, left: null, right: null,
+          meta: null
+        }
+
+        if (isLeft) {
+          T_A.meta = {
+            p1: { ...T_i.meta.p1 },
+            p2: { x: p_a.x, y: bet_points(T_i.meta.p1, T_i.meta.p2, p_a.x) },
+            p3: { ...T_i.meta.p3 },
+            p4: { x: p_a.x, y: bet_points(T_i.meta.p3, T_i.meta.p4, p_a.x) },
+          }
+        }
+        else {
+          T_A.meta = {
+            p1: { x: p_b.x, y: bet_points(T_i.meta.p1, T_i.meta.p2, p_b.x) },
+            p2: { ...T_i.meta.p2 },
+            p3: { x: p_b.x, y: bet_points(T_i.meta.p3, T_i.meta.p4, p_b.x) },
+            p4: { ...T_i.meta.p4 },
+          }
         }
 
         let PQ = {
@@ -367,13 +580,32 @@ TrapezoidMap.prototype.add_segment = function(p_a, p_b) {
         swap_d3_leaf(this.d3_root, trapezoids[i], PQ)
         this._d3_update(this.d3_root, this.d3_treemap, this.d3_svg)
         swap_leaf(trapezoids[i], PQ)
+
+        this.draw_trapezoid(T_A.meta, T_A.name)
       }
       else {
+        T_up.meta = {
+          p1: { ...T_i.meta.p1 },
+          p2: { ...T_i.meta.p2 },
+          p3: { x: T_i.meta.p1.x, y: bet_points(p_a, p_b, T_i.meta.p1.x) },
+          p4: { x: T_i.meta.p2.x, y: bet_points(p_a, p_b, T_i.meta.p2.x) },
+        }
+        T_dw.meta = {
+          p1: { x: T_i.meta.p1.x, y: bet_points(p_a, p_b, T_i.meta.p1.x) },
+          p2: { x: T_i.meta.p2.x, y: bet_points(p_a, p_b, T_i.meta.p2.x) },
+          p3: { ...T_i.meta.p3 },
+          p4: { ...T_i.meta.p4 },
+        }
+
         swap_d3_leaf(this.d3_root, trapezoids[i], S_i)
         this._d3_update(this.d3_root, this.d3_treemap, this.d3_svg)
         swap_leaf(trapezoids[i], S_i)
       }
-    }
+
+      this.remove_trapezoid(T_i.name)
+      this.draw_trapezoid(T_up.meta, T_up.name)
+      this.draw_trapezoid(T_dw.meta, T_dw.name)
+    } // for loop
 
   }
 
@@ -390,18 +622,25 @@ TrapezoidMap.prototype.add_segment = function(p_a, p_b) {
 * Assert point_A.x < point_B.x
 */
 TrapezoidMap.prototype.cross_trapezoid = function(p_a, p_b) {
-  this._point_list = this._point_list
+
   let pre_trap = null
   let trap_list = []
   let sample_list = this._point_list.map((e, i) => [
     { x: e.x + 1, y: e.y },
     { x: e.x - 1, y: e.y },
   ])
+  .concat([
+    [
+      { x: p_a.x + 1, y: p_a.y },
+      { x: p_b.x - 1, y: p_b.y },
+    ]
+  ])
   .reduce((a, b) => a.concat(b))
   .sort((A, B) => A.x - B.x)
 
   this.debug('-----------[Sample points]-----------')
   this.debug(sample_list)
+  this.debug_clear_draw()
 
   for(let point of sample_list) {
     if(point.x < p_a.x || point.x > p_b.x)
@@ -409,6 +648,7 @@ TrapezoidMap.prototype.cross_trapezoid = function(p_a, p_b) {
 
     let f_Px = (point.x - p_b.x) * ((p_b.y - p_a.y) / (p_b.x - p_a.x)) + p_b.y
     let sample_trapezoid = this.query({x: point.x, y: f_Px})
+    this.debug_draw({x: point.x, y: f_Px})
 
     if(sample_trapezoid == pre_trap) {
       continue

@@ -20,8 +20,8 @@ function test_simple_insert_query() {
     map._op_mode = 'ADD'
   })
 
-  $('#btn-move').click(()=>{
-    map._op_mode = 'MOVE'
+  $('#btn-query').click(()=>{
+    map._op_mode = 'QUERY'
   })
 
   $('#btn-link').click(()=>{
@@ -45,6 +45,20 @@ function test_simple_insert_query() {
 
   // map.add_segment({x:-10, y:0}, {x:10, y:0})
   // map.add_segment({x:-10, y:0}, {x:-2, y:3})
+
 }
 
-test_simple_insert_query()
+
+function test_poly() {
+  map.add_segment({x:121, y:123}, {x:338, y:121})
+  map.add_segment({x:338, y:121}, {x:434, y:264})
+  map.add_segment({x:121, y:123}, {x:434, y:264})
+  map.add_segment({x:139, y:282}, {x:434, y:264})
+}
+
+$(window).bind("load", function() {
+  let t=document.querySelector('#poly-map')
+  console.log($(t).height())
+  test_simple_insert_query()
+})
+// test_poly()
